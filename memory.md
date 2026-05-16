@@ -237,3 +237,174 @@ Fátima (74 anos, F) internada em 10-11/05/2026 no Hospital São Bernardo com:
 - **Doença vascular é sistêmica** - Se tem placa no coração, tem placa no cérebro, tem placa nas pernas. É a mesma doença em lugares diferentes.
 
 - **LDL precisa estar <70 em paciente com stent** - Fátima estava em 127. Atorvastatina precisa ser otimizada.
+
+---
+
+### Chat: Script LINX ERP - Consultar Estoque por Data | 13-14-04-2026
+
+**Data**: 2026-04-13 até 2026-04-14  
+**Duração**: ~1 dia de debugging  
+**Temas**: SQL, LINX ERP, estoque, Foreign Keys, troubleshooting, database  
+**Resumo rápido**: Criação e troubleshooting de script SQL para consultar posição de estoque por data específica no LINX ERP, envolvendo diagnóstico e correção de integridade referencial (Foreign Keys)
+
+#### Conteúdo do Chat
+
+**Objetivo Inicial:**
+Consultar estoque por data específica (posição posicional) no banco LINX ERP da Dorinhos
+
+**Descobertas principais:**
+
+1. **Estrutura Real do Linx**
+   - Tabela ESTOQUE_PRODUTOS não armazena histórico, apenas saldo atual
+   - Saldos são armazenados em colunas ES1 a ES48 (uma por filial/depósito)
+   - Histórico fica em ESTOQUE_PRODUTOS_HISTORICO
+   - Procedure nativa: LX_GERA_HISTORICO_ESTOQUE_PA
+
+2. **Scripts Desenvolvidos**
+
+   **Script Inicial (não funcionou):**
+   - Tentou usar colunas que não existiam (DTMOV, CODPROD, DESCRICAO, CODFILIAL, UNIDADE, TIPOMOV, QUANTIDADE)
+   - Erro: Msg 207 - Nome de coluna inválido
+
+   **Script Corrigido para Saldo Atual:**
+   ```sql
+   DECLARE @DATA_REFERENCIA DATE = '2026-04-13'
+
+   SELECT
+       ep.PRODUTO,
+       ep.COR_PRODUTO,
+       ep.FILIAL,
+       ep.ESTOQUE,
+       ep.ULTIMA_ENTRADA,
+       ep.ULTIMA_SAIDA,
+       ep.ULTIMO_CUSTO1,
+       ep.CUSTO_MEDIO1
+   FROM
+       ESTOQUE_PRODUTOS ep
+   WHERE
+       (ep.ULTIMA_ENTRADA <= @DATA_REFERENCIA OR ep.ULTIMA_SAIDA <= @DATA_REFERENCIA)
+       AND ep.ESTOQUE <> 0
+   ORDER BY
+       ep.FILIAL,
+       ep.PRODUTO
+   ```
+   ⚠️ Limitação: Mostra saldo de HOJE filtrado por atividade naquela data, não o saldo naquela data
+
+3. **Procedure LINX Nativa: LX_GERA_HISTORICO_ESTOQUE_PA**
+   - Syntax: `LX_GERA_HISTORICO_ESTOQUE_PA '20260331', 'LOJA 31-SHOP OSASCO PLAZA'`
+   - Gera histórico em ESTOQUE_PRODUTOS_HISTORICO
+   - Problema: Foreign Key constraint violations
+
+4. **Foreign Key Issues e Diagnóstico**
+
+   **Erro Original:**
+   ```
+   Msg 547: A instrução INSERT conflitou com a restrição do FOREIGN KEY 
+   "XFK13034_ESTOQUE_PRODUTOS_HISTORICO". 
+   Conflito na tabela "dbo.PRODUTO_CORES".
+   ```
+
+   **FK Definition:**
+   - XFK13034_ESTOQUE_PRODUTOS_HISTORICO valida PRODUTO + COR_PRODUTO em PRODUTO_CORES
+   - Valida dois campos juntos (composite key)
+
+   **Diagnóstico de Dados Órfãos:**
+   - Procurando em ESTOQUE_PRODUTOS: nenhum órfão
+   - Procurando em tabelas de movimentação (ESTOQUE_PROD_CTG_AJUSTE, FATURAMENTO_PROD, LOJA_VENDA_PRODUTO, etc.)
+   - Encontrados órfãos em: **ESTOQUE_PROD_CTG_AJUSTE** (ajustes de contagem antigos)
+
+5. **Problemas Identificados**
+
+   **Loja 31 - SHOP OSASCO PLAZA:**
+   - Produtos: 04.02.12 / cor 1, 04.06.09 / cor 1
+   - Problema: Formatação de COR_PRODUTO incompatível
+   - Em ESTOQUE_PROD_CTG_AJUSTE: '     1    ' (espaços antes, ASCII 32)
+   - Em PRODUTO_CORES: '1         ' (sem espaços antes, ASCII 49)
+   - Movimentações desde 2010-2023 afetadas
+
+   **Obstáculo - Trigger:**
+   - Procedure LXU_ESTOQUE_PROD_CTG_AJUSTE bloqueia alterações anteriores a 31/08/2025
+   - Erro: "Não é possível Alterar Movimentacao de Estoque anterior a #31/08/2025"
+   - Solução: Desabilitar trigger temporariamente, fazer UPDATE, reabilitar
+
+   **Loja 06 - SHOP CPO LIMPO:**
+   - Problema similar: produto 04.02.16 com cor em formato errado ('         1')
+   - Mesmo padrão de inconsistência em ESTOQUE_PROD_CTG_AJUSTE
+
+6. **Correções Aplicadas**
+
+   **Template de Correção (Trigger + UPDATE):**
+   ```sql
+   -- 1. Desabilita a trigger temporariamente
+   DISABLE TRIGGER LXU_ESTOQUE_PROD_CTG_AJUSTE ON ESTOQUE_PROD_CTG_AJUSTE
+
+   -- 2. Faz o UPDATE com o formato correto
+   UPDATE A
+   SET A.COR_PRODUTO = '1         '  -- Formato correto (sem espaços antes)
+   FROM ESTOQUE_PROD_CTG_AJUSTE A
+   JOIN ESTOQUE_PROD_CONTAGEM B ON A.NOME_CONTAGEM = B.NOME_CONTAGEM
+   WHERE A.PRODUTO = '04.02.16    '
+     AND A.COR_PRODUTO = '         1'  -- Formato incorreto
+
+   -- 3. Reabilita a trigger IMEDIATAMENTE
+   ENABLE TRIGGER LXU_ESTOQUE_PROD_CTG_AJUSTE ON ESTOQUE_PROD_CTG_AJUSTE
+
+   -- 4. Confirma quantas linhas foram atualizadas
+   SELECT COUNT(*) AS ATUALIZADAS
+   FROM ESTOQUE_PROD_CTG_AJUSTE
+   WHERE PRODUTO = '04.02.16    '
+     AND COR_PRODUTO = '1         '
+   ```
+
+7. **Scripts Utilitários Desenvolvidos**
+
+   **Diagnóstico de Órfãos Completo:**
+   - Consulta múltiplas tabelas de movimentação
+   - Identifica qual tabela contém o produto/cor incompatível
+   - Filtrável por filial e data
+
+   **Debug Detalhado (último estágio):**
+   - Simula exatamente o que a procedure tenta inserir
+   - Mostra última data de saldo anterior
+   - Indica precisamente qual PRODUTO + COR_PRODUTO causa o erro
+
+#### Insights e Aprendizados
+
+**Aprendizados sobre LINX ERP:**
+
+- **Procedure nativa precisa de integridade referencial limpa** - O LINX tem validações de dados muito rigorosas. Qualquer inconsistência no histórico quebra a geração.
+
+- **Formatos de string são críticos em FKs** - COR_PRODUTO com espaços diferentes = strings diferentes = FK falha. '1' ≠ '     1    '
+
+- **Dados históricos antigos (2010+) acumulam inconsistências** - Produtos deletados mas com movimentações ainda no banco.
+
+- **Triggers do Linx protegem data limit** - Impossível alterar movimentações anteriores a 31/08/2025 sem desabilitar. Mas é seguro (disable/enable) se feito atomicamente.
+
+- **PRODUTO_CORES é a tabela mãe** - Todos os registros de movimentação precisam referenciar cores válidas ali.
+
+**Metodologia de Troubleshooting:**
+
+- Diagnóstico em camadas: primeiro tabela principal, depois tabelas de movimentação, depois histórico.
+- Validação SEMPRE antes de UPDATE em dados históricos.
+- Sempre desabilitar/reabilitar trigger em lote único para garantir reabilitação.
+- Script de debug final que simula exatamente o que a procedure faz.
+
+**Sobre Procedure LX_GERA_HISTORICO_ESTOQUE_PA:**
+
+- Busca de múltiplas tabelas de movimentação: ESTOQUE_PROD_CTG_AJUSTE, FATURAMENTO_PROD, LOJA_VENDA_PRODUTO, ESTOQUE_PROD1_SAI, ESTOQUE_PROD1_ENT, LOJA_ENTRADAS_PRODUTO, LOJA_SAIDAS_PRODUTO, LOJA_VENDA_TROCA, FATURAM_DEV_PROD
+- Requer saldo anterior válido em ESTOQUE_PRODUTOS_HISTORICO
+- Calcula saldo posicional até data especificada
+- Valida FK em cada INSERT
+
+**Solução Final para Consulta de Estoque por Data:**
+
+1. Usar ESTOQUE_PRODUTOS_HISTORICO (após procedure executar)
+2. Filtrar por DATA_SALDO <= data_desejada
+3. Agrupar por PRODUTO + COR_PRODUTO + FILIAL para último saldo
+4. Antes: garantir que LX_GERA_HISTORICO_ESTOQUE_PA roda sem erros (corrigir órfãos se necessário)
+
+**Dica Operacional:**
+
+- Antes de gerar histórico em produção, rodar diagnóstico de órfãos para cada filial
+- Documentar quais produtos/cores têm inconsistência para referência futura
+- Teste em filial menor primeiro, depois expande para outras
