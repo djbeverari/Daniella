@@ -32,3 +32,49 @@ metadata:
 ## Referências úteis
 <!-- Links, documentação, recursos importantes -->
 - (a preencher)
+
+---
+
+# Histórico de Chats
+
+## Template para adicionar chats
+
+```
+### Chat: [Título/Assunto] | [Data]
+
+**Data**: 2026-05-16  
+**Duração**: ~XX minutos  
+**Temas**: [tag1], [tag2], [tag3]  
+**Resumo rápido**: Uma linha resumindo o propósito do chat
+
+#### Conteúdo do Chat
+
+[Cole aqui todo o conteúdo do chat do Claude Desktop]
+
+#### Insights e Aprendizados
+
+- Insight 1
+- Insight 2
+- Coisa pra lembrar
+
+---
+```
+
+## Chats Adicionados
+
+<!-- Adicione seus chats aqui usando o template acima -->
+
+### Chat: [Adicionar seu primeiro chat] | [Data]
+
+**Data**: (a preencher)  
+**Duração**: (a preencher)  
+**Temas**: (a preencher)  
+**Resumo rápido**: (a preencher)
+
+#### Conteúdo do Chat
+
+(Cole aqui o conteúdo do chat)
+
+#### Insights e Aprendizados
+
+- (a preencher)
